@@ -1,3 +1,23 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 #include "siever.h"
 #include "iostream"
 #include "fstream"
@@ -96,9 +116,9 @@ void Siever::bgj1_sieve(double alpha)
     threadpool.wait_work();
 
     invalidate_sorting();
-    parallel_sort_cdb(); // TODO: Remove?
     statistics.inc_stats_sorting_sieve();
 
+    status_data.plain_data.sorted_until = 0;
     // we set histo for statistical purposes
     recompute_histo(); // TODO: Remove?
     return;
@@ -479,15 +499,15 @@ bool Siever::bgj1_execute_delayed_replace(std::vector<Entry>& transaction_db, bo
     size_t improvindex = params.bgj1_improvement_db_ratio * (cdb.size()-1);
     if (params.threads == 1)
     {
-        std::sort(cdb.begin()+GBL_replace_pos+1, cdb.end(), &compare_CE);
-        std::inplace_merge(cdb.begin(), cdb.begin()+GBL_replace_pos+1, cdb.end(), &compare_CE);
+        std::sort(cdb.begin()+GBL_replace_pos+1, cdb.end(), compare_CE());
+        std::inplace_merge(cdb.begin(), cdb.begin()+GBL_replace_pos+1, cdb.end(), compare_CE());
     }
     else
     {
-        bgj1_cdb_copy=cdb;
-        std::sort(bgj1_cdb_copy.begin()+GBL_replace_pos+1, bgj1_cdb_copy.end(), &compare_CE);
-        std::inplace_merge(bgj1_cdb_copy.begin(), bgj1_cdb_copy.begin()+GBL_replace_pos+1, bgj1_cdb_copy.end(), &compare_CE);
-        cdb.swap(bgj1_cdb_copy);
+        cdb_tmp_copy=cdb;
+        std::sort(cdb_tmp_copy.begin()+GBL_replace_pos+1, cdb_tmp_copy.end(), compare_CE());
+        std::inplace_merge(cdb_tmp_copy.begin(), cdb_tmp_copy.begin()+GBL_replace_pos+1, cdb_tmp_copy.end(), compare_CE());
+        cdb.swap(cdb_tmp_copy);
         GBL_start_of_cdb_ptr = &(cdb.front());
     }
     statistics.inc_stats_sorting_sieve();

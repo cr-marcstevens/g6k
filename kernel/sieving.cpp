@@ -1,3 +1,23 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 #include "siever.h"
 #include "iostream"
 #include "fstream"
@@ -63,7 +83,7 @@ void Siever::gauss_sieve(size_t max_db_size)
         // sort the old and new part separately. Note that (except at the beginning), these also
         // correspond to the distinction explained above. The old part already is sorted: We sort
         // the 'queue'-part; shorter vectors to be processed first
-        std::sort(cdb.begin() + old_S, cdb.end(),  &compare_CE);
+        pa::sort(cdb.begin() + old_S, cdb.end(), compare_CE(), threadpool);
         //CompressedEntry* const fast_cdb = &(cdb.front());
         CompressedEntry* const fast_cdb = cdb.data();
         // while there is no elements in the 'queue'-part of the list
@@ -76,8 +96,9 @@ void Siever::gauss_sieve(size_t max_db_size)
 start_over:
             for (size_t j = 0; j < p_index; ++j) // WHY IS IT p_index NOT queue_begin???
             {
+#ifndef NDEBUG
                 LFT cv2_vec_len = fast_cdb[j].len;
-
+#endif
                 if( UNLIKELY(is_reducible_maybe<XPC_THRESHOLD>(cv,&(fast_cdb[j].c.front()) )))
                 {
                     #if COLLECT_STATISTICS_XORPOPCNT_PASS || COLLECT_STATISTICS_FULLSCPRODS
@@ -92,7 +113,7 @@ start_over:
                             //std::cout <<" p  is reduced "<< std::endl;
                             goto start_over;
                         }
-                        else // some other point 'above' p was reduced, move it to the 'Queue'-part of the list
+                        else if(queue_begin) // some other point 'above' p was reduced, move it to the 'Queue'-part of the list
                         {
                             assert(cv2_vec_len > fast_cdb[j].len );
                             using std::swap;
@@ -159,7 +180,7 @@ bool Siever::nv_sieve()
             if (kk < .5 * S) break;
         }
 
-        std::sort(cdb.begin(), cdb.end(), &compare_CE);
+        pa::sort(cdb.begin(), cdb.end(), compare_CE(), threadpool);
         status_data.plain_data.sorted_until = cdb.size();
 
         if (kk > .8 *S) return false;
@@ -172,7 +193,7 @@ bool Siever::nv_sieve()
             cumul += histo[i];
             if (i>=imin && 1.99 * cumul > std::pow(1. + i* (1./size_of_histo), n/2.) * params.saturation_ratio)
             {
-                assert(std::is_sorted(cdb.cbegin(),cdb.cend(), &compare_CE  ));
+                assert(std::is_sorted(cdb.cbegin(),cdb.cend(), compare_CE()  ));
                 return true;
             }
         }

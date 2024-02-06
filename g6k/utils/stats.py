@@ -1,4 +1,24 @@
 # -*- coding: utf-8 -*-
+####
+#
+#   Copyright (C) 2018-2021 Team G6K
+#
+#   This file is part of G6K. G6K is free software:
+#   you can redistribute it and/or modify it under the terms of the
+#   GNU General Public License as published by the Free Software Foundation,
+#   either version 2 of the License, or (at your option) any later version.
+#
+#   G6K is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+#
+####
+
+
 """
 Statistics for sieving.
 """
@@ -11,9 +31,9 @@ from fpylll.tools.quality import basis_quality
 from g6k.siever import Siever
 import time
 try:
-   from time import process_time # Python 3
+    from time import process_time  # Python 3
 except ImportError:
-  from time import clock as process_time  # Python 2
+    from time import clock as process_time  # Python 2
 import logging
 
 
@@ -34,7 +54,7 @@ class SieveTreeTracer(Tracer):
         if start_clocks:
             self.reenter()
 
-    recognized_sieves = {"bgj1", "triple_mt", "triple_st", "gauss", "gauss_old", "nv"}
+    recognized_sieves = {"bgj1", "hk3", "gauss", "nv", "bdgl"}
 
     @classmethod
     def is_sieve_node(cls, label):
@@ -107,7 +127,7 @@ class SieveTreeTracer(Tracer):
                 if i == 0:
                     node.data["|v|"] = length
                 else:
-                    self.instance.update_gso()
+                    self.instance.update_gso(0, self.instance.full_n)
                     node.data["|v|"] = self.instance.M.get_r(0, 0)
             except (IndexError, AttributeError):
                 node.data["|v|"] = None
@@ -119,8 +139,8 @@ class SieveTreeTracer(Tracer):
             else:
                 node.data[k] = Accumulator(v, repr="min")
 
-        if kwds.get("dump_gso", False):
-            node.data["r"] =  node.data.get("r", []) + [self.instance.M.r()]
+        if kwds.get("dump_gso", node.level <= 1):
+            node.data["r"] =  self.instance.M.r()
 
         verbose_labels = ["tour", "prog_tour"]
 
@@ -146,3 +166,4 @@ class SieveTreeTracer(Tracer):
             print(pretty_dict(report))
 
         self.current = self.current.parent
+        return self.trace

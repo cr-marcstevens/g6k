@@ -1,3 +1,23 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 #ifndef G6K_STATISTICS_HPP
 #define G6K_STATISTICS_HPP
 
@@ -26,14 +46,13 @@
 */
 
 /**
-    How SieveStatistics works:
-    Depending on whether ENABLE_STATS / ENABLE_EXTENDED_STATS are set, we set COLLECT_STATISTICS to a numerical value that
-    indicates the level of statistics we collect.
-    This is then used to set various COLLECT_STATISTICS_FOO macros.
-    ENABLE_STATS / ENABLE_EXTENDED_STATS is set by the build system (rebuild.sh -s resp. rebuild.sh -ss). The COLLECT_STATISTICS_FOO macros can be
-    manually set to override individual statistics.
-    These macros control which member fields SieveStatistics have.
-    We also have ENABLE_IF_STATS_FOO(x) macros that conditionally compile x to simplify some code.
+    How SieveStatistics works: Depending on whether ENABLE_STATS / ENABLE_EXTENDED_STATS are set, we
+    set COLLECT_STATISTICS to a numerical value that indicates the level of statistics we collect.
+    This is then used to set various COLLECT_STATISTICS_FOO macros. ENABLE_STATS /
+    ENABLE_EXTENDED_STATS is set by the build system (./configure --with-stats>0). The
+    COLLECT_STATISTICS_FOO macros can be manually set to override individual statistics. These
+    macros control which member fields SieveStatistics have. We also have ENABLE_IF_STATS_FOO(x)
+    macros that conditionally compile x to simplify some code.
 
     The (non-static) members of SieveStatistics are all private.
     We have getters and incrementers with names get_stats_FOO and inc_stats_BAR.

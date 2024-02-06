@@ -1,9 +1,32 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 #ifndef G6K_SIEVER_INL
 #define G6K_SIEVER_INL
 
 #ifndef G6K_SIEVER_H
 #error Do not include siever.inl directly
 #endif
+
+#include "parallel_algorithms.hpp"
+namespace pa = parallel_algorithms;
 
 // a += c*b
 template <typename Container, typename Container2>
@@ -62,31 +85,23 @@ inline size_t Siever::histo_index(double l) const
 template<class Functor>
 void Siever::apply_to_all_entries(Functor const &functor)
 {
-    size_t th_n = 1 + db.size() / MIN_ENTRY_PER_THREAD;
-    th_n = th_n > this->params.threads ? this->params.threads : th_n;
-
+    int th_n = std::min<int>(this->params.threads, 1 + db.size()/MIN_ENTRY_PER_THREAD);
     threadpool.run([this,functor](int th_i, int th_n)
-    {
-        size_t i = (th_i*this->db.size()) / th_n;
-        size_t const e = ((th_i+1)*this->db.size()) / th_n;
-        for (; i < e; ++i)
-            functor(this->db[i]);
-    }, th_n);
+        {
+	    for (auto i : pa::subrange(db.size(), th_i, th_n))
+		functor(this->db[i]);
+        }, th_n);
 }
 
 template<class Functor>
 void Siever::apply_to_all_compressed_entries(Functor const &functor)
 {
-    size_t th_n = 1 + cdb.size() / MIN_ENTRY_PER_THREAD;
-    th_n = th_n > this->params.threads ? this->params.threads : th_n;
-
+    int th_n = std::min<int>(this->params.threads, 1 + cdb.size()/MIN_ENTRY_PER_THREAD);
     threadpool.run([this,functor](int th_i, int th_n)
-    {
-        size_t i = (th_i*this->cdb.size()) / th_n;
-        size_t const e = ((th_i+1)*this->cdb.size()) / th_n;
-        for (; i < e; ++i)
-            functor(this->cdb[i]);
-    }, th_n);
+        {
+	    for (auto i : pa::subrange(cdb.size(), th_i, th_n))
+		functor(this->cdb[i]);
+        }, th_n);
 }
 
 template<unsigned int THRESHOLD>
@@ -181,8 +196,7 @@ inline void Siever::recompute_data_for_entry(Entry &e)
         for (int k = 0; k < OTF_LIFT_HELPER_DIM; ++k)
         {
             int const i = l - (k + 1);
-            // std::cerr << "RECNOB" << k << " " << i << " " << l << " " << (params.lift_left_bound) << std::endl;
-            if (i < static_cast<signed int>(params.lift_left_bound)) break;
+            if (i < static_cast<signed int>(ll)) break;
             e.otf_helper[k] = std::inner_product(e.x.cbegin(), e.x.cbegin()+n, full_muT[i].cbegin()+l,  static_cast<FT>(0.));
         }
     }
@@ -248,9 +262,8 @@ inline void Siever::recompute_data_for_entry_babai(Entry &e, int babai_index)
         for (int k = 0; k < OTF_LIFT_HELPER_DIM; ++k)
         {
             int const i = l - (k + 1);
-            // std::cerr << "RECBAB" << k << " " << i << " " << l << " " << (params.lift_left_bound) << std::endl;
-
-            if (i < static_cast<signed int>(params.lift_left_bound)) break;
+            
+            if (i < static_cast<signed int>(ll)) break;
             e.otf_helper[k] = std::inner_product(e.x.cbegin(), e.x.cbegin()+n, full_muT[i].cbegin()+l,  static_cast<FT>(0.));
         }
     }

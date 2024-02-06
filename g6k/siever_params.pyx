@@ -5,6 +5,9 @@ Sieving parameters.
 
 from contextlib import contextmanager
 from pkg_resources import resource_filename
+from decl cimport MAX_SIEVING_DIM
+
+import warnings
 
 @contextmanager
 def temp_params(self, **kwds):
@@ -43,7 +46,6 @@ cdef class SieverParams(object):
         "reserved_n",
         "reserved_db_size",
         "threads",
-        "lift_left_bound",
         "sample_by_sums",
         "otf_lift",
         "lift_radius",
@@ -55,15 +57,19 @@ cdef class SieverParams(object):
         "bgj1_resort_ratio",
         "bgj1_transaction_bulk_size",
         "simhash_codes_basedir",
+        "bdgl_improvement_db_ratio",
         # Python
         "db_size_base",
         "db_size_factor",
         "bgj1_bucket_size_expo",
         "bgj1_bucket_size_factor",
-        "triplesieve_db_size_base",
-        "triplesieve_db_size_factor",
+        "bdgl_bucket_size_factor",
+        "bdgl_blocks",
+        "bdgl_multi_hash",
+        "bdgl_min_bucket_size",
         "default_sieve",
-        "gauss_crossover"
+        "gauss_crossover",
+        "dual_mode"
     ]
 
     def __init__(self, **kwds):
@@ -97,21 +103,27 @@ cdef class SieverParams(object):
             kwds["bgj1_bucket_size_expo"] = .5     # The initial bgj1_bucket_size for sieving is
         if "bgj1_bucket_size_factor" not in kwds:
             kwds["bgj1_bucket_size_factor"] =  3.2
+        if "bdgl_multi_hash" not in kwds:
+            kwds["bdgl_multi_hash"] = 4
+        if "bdgl_blocks" not in kwds:
+            kwds["bdgl_blocks"] = 2
+        if "bdgl_improvement_db_ratio" not in kwds:
+            kwds["bdgl_improvement_db_ratio"] = 0.8
+        if "bdgl_bucket_size_factor" not in kwds:
+            kwds["bdgl_bucket_size_factor"] =  .3
+        if "bdgl_min_bucket_size" not in kwds:
+            kwds["bdgl_min_bucket_size"] = 128
 
-        # TODO : remove the two following ?
-        if "triplesieve_db_size_base" not in kwds:
-            kwds["triplesieve_db_size_base"] = (1.2999)**.5 # The initial db_size for triple sieve
-                                                            # (sqrt(3) * 3/4)
-        if "triplesieve_db_size_factor" not in kwds:
-            kwds["triplesieve_db_size_factor"] = 2.5       # db_size_factor_3sieve *
-                                                           # db_size_base_3sieve**n for the next
-                                                           # iteration
+
+        if "dual_mode" not in kwds:
+            kwds["dual_mode"] = False                      
+
 
         if "reserved_db_size" not in kwds and "reserved_n" in kwds:
             kwds["reserved_db_size"] = kwds["db_size_factor"] * kwds["db_size_base"]**kwds["reserved_n"] + 100
 
         if "default_sieve" not in kwds or kwds["default_sieve"] is None:
-            kwds["default_sieve"] = "gauss_triple_mt"
+            kwds["default_sieve"] = "hk3"
         if "gauss_crossover" not in kwds:
             kwds["gauss_crossover"] = 50
         if "simhash_codes_basedir" not in kwds:
@@ -136,13 +148,13 @@ cdef class SieverParams(object):
             raise ValueError("This object is read only, create a copy to edit.")
 
         if key == "reserved_n":
+            if value > MAX_SIEVING_DIM:
+                warnings.warn("reserved_n is larger than maximum supported. To fix this warning, change the value of MAX_SIEVING_DIM in siever.h and recompile.")
             self._core.reserved_n = value
         elif key == "reserved_db_size":
             self._core.reserved_db_size = value
         elif key == "threads":
             self._core.threads = value
-        elif key == "lift_left_bound":
-            self._core.lift_left_bound = value
         elif key == "sample_by_sums":
             self._core.sample_by_sums = value
         elif key == "otf_lift":
@@ -164,7 +176,9 @@ cdef class SieverParams(object):
         elif key == "bgj1_transaction_bulk_size":
             self._core.bgj1_transaction_bulk_size = value
         elif key == "simhash_codes_basedir":
-            self._core.simhash_codes_basedir = value
+            self._core.simhash_codes_basedir = value.encode("utf-8") if isinstance(value, str) else value
+        elif key == "bdgl_improvement_db_ratio":
+            self._core.bdgl_improvement_db_ratio = value
         else:
             self._pyattr[key] = value
 
@@ -175,8 +189,6 @@ cdef class SieverParams(object):
             return self._core.reserved_db_size
         elif key == "threads":
             return self._core.threads
-        elif key == "lift_left_bound":
-            return self._core.lift_left_bound
         elif key == "sample_by_sums":
             return self._core.sample_by_sums
         elif key == "otf_lift":
@@ -199,6 +211,8 @@ cdef class SieverParams(object):
             return self._core.bgj1_transaction_bulk_size
         elif key == "simhash_codes_basedir":
             return self._core.simhash_codes_basedir
+        elif key == "bdgl_improvement_db_ratio":
+            return self._core.bdgl_improvement_db_ratio
         else:
             return self._pyattr[key]
 
@@ -247,10 +261,10 @@ cdef class SieverParams(object):
             >>> sp.bgj1_bucket_size_factor
             3.2
 
-            >>> sp.bgj2_bucket_max_size_factor
+            >>> sp.bgj2_bucket_max_size_factor  # doctest: +ELLIPSIS
             Traceback (most recent call last):
             ...
-            AttributeError: 'SieverParams' object has no attribute 'bgj2_bucket_max_size_factor'
+            AttributeError: 'SieverParams' object has no attribute 'bgj2_bucket_max_size_factor'...
 
         """
         try:
@@ -264,10 +278,10 @@ cdef class SieverParams(object):
 
             >>> from g6k import SieverParams
             >>> sp = SieverParams()
-            >>> sp.bgj2_bucket_max_size_factor
+            >>> sp.bgj2_bucket_max_size_factor  # doctest: +ELLIPSIS
             Traceback (most recent call last):
             ...
-            AttributeError: 'SieverParams' object has no attribute 'bgj2_bucket_max_size_factor'
+            AttributeError: 'SieverParams' object has no attribute 'bgj2_bucket_max_size_factor'...
 
             >>> sp.bgj2_bucket_max_size_factor = 2.0
             >>> sp.bgj2_bucket_max_size_factor
@@ -387,6 +401,8 @@ cdef class SieverParams(object):
         for k, v in self._pyattr.iteritems():
             if k not in self.known_attributes:
                 yield k, v
+
+    items = iteritems
 
     def __iter__(self):
         """

@@ -1,4 +1,4 @@
-Cython
+Cython>=3.0
 cysignals
 flake8
 ipython
@@ -8,3 +8,4 @@ pytest
 requests
 scipy
 multiprocessing-logging
+matplotlib

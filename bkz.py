@@ -1,5 +1,25 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+####
+#
+#   Copyright (C) 2018-2021 Team G6K
+#
+#   This file is part of G6K. G6K is free software:
+#   you can redistribute it and/or modify it under the terms of the
+#   GNU General Public License as published by the Free Software Foundation,
+#   either version 2 of the License, or (at your option) any later version.
+#
+#   G6K is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+#
+####
+
+
 """
 BKZ Command Line Client
 """
@@ -9,18 +29,21 @@ from __future__ import print_function
 import logging
 import re
 import time
+import pickle as pickler
 
 from collections import OrderedDict
 
 from fpylll import BKZ as BKZ_FPYLLL, GSO, IntegerMatrix
 from fpylll.tools.quality import basis_quality
 
-from g6k.algorithms.bkz import naive_bkz_tour, pump_n_jump_bkz_tour
+from g6k.algorithms.bkz import naive_bkz_tour, pump_n_jump_bkz_tour, slide_tour
 from g6k.siever import Siever
 from g6k.utils.cli import parse_args, run_all, pop_prefixed_params
 from g6k.utils.stats import SieveTreeTracer, dummy_tracer
 from g6k.utils.util import load_prebkz
+from g6k.utils.util import sanitize_params_names, print_stats, output_profiles, db_stats
 import six
+import numpy as np
 from six.moves import range
 
 
@@ -32,7 +55,7 @@ def bkz_kernel(arg0, params=None, seed=None):
     :param params: parameters for BKZ:
 
         - bkz/alg: choose the underlying BKZ from
-          {fpylll, naive, pump_n_jump}
+          {fpylll, naive, pump_n_jump, slide}
 
         - bkz/blocksizes: given as low:high:inc perform BKZ reduction
           with blocksizes in range(low, high, inc) (after some light)
@@ -54,6 +77,8 @@ def bkz_kernel(arg0, params=None, seed=None):
 
         - pump/down_sieve: sieve after each insert in the pump-down
           phase of the pump
+        
+        - slide/overlap: shift of the dual blocks when running slide reduction
 
         - challenge_seed: a seed to randomise the generated lattice
 
@@ -72,6 +97,7 @@ def bkz_kernel(arg0, params=None, seed=None):
     dim4free_fun = params.pop("bkz/dim4free_fun")
     extra_dim4free = params.pop("bkz/extra_dim4free")
     jump = params.pop("bkz/jump")
+    overlap = params.pop("slide/overlap")
     pump_params = pop_prefixed_params("pump", params)
     workout_params = pop_prefixed_params("workout", params)
 
@@ -111,8 +137,9 @@ def bkz_kernel(arg0, params=None, seed=None):
 
     T0 = time.time()
     for blocksize in blocksizes:
+
         for t in range(tours):
-            with tracer.context("tour", t):
+            with tracer.context("tour", t, dump_gso=True):
                 if algbkz == "fpylll":
                     par = BKZ_FPYLLL.Param(blocksize,
                                            strategies=BKZ_FPYLLL.DEFAULT_STRATEGY,
@@ -131,6 +158,12 @@ def bkz_kernel(arg0, params=None, seed=None):
                                          dim4free_fun=dim4free_fun,
                                          extra_dim4free=extra_dim4free,
                                          pump_params=pump_params)
+                elif algbkz == "slide":
+                    slide_tour(g6k, dummy_tracer, blocksize, overlap=overlap,
+                               dim4free_fun=dim4free_fun,
+                               extra_dim4free=extra_dim4free,
+                               workout_params=workout_params,
+                               pump_params=pump_params)
                 else:
                     raise ValueError("bkz/alg=%s not recognized." % algbkz)
 
@@ -142,8 +175,11 @@ def bkz_kernel(arg0, params=None, seed=None):
                              blocksize, slope, time.time() - T0))
 
     tracer.exit()
+    slope = basis_quality(M)["/"]
+    stat = tracer.trace
     try:
-        return tracer.trace
+        stat.data["slope"] = np.array(slope)
+        return stat
     except AttributeError:
         return None
 
@@ -166,9 +202,10 @@ def bkz_tour():
                                   bkz__extra_dim4free=0,
                                   bkz__jump=1,
                                   bkz__dim4free_fun="default_dim4free_fun",
+                                  slide__overlap=1,
                                   pump__down_sieve=True,
                                   challenge_seed=0,
-                                  dummy_tracer=True,  # set to control memory
+                                  dummy_tracer=False,  # set to control memory
                                   verbose=False
                                   )
 
@@ -180,23 +217,19 @@ def bkz_tour():
                     workers=args.workers,
                     seed=args.seed)
 
+
     inverse_all_params = OrderedDict([(v, k) for (k, v) in six.iteritems(all_params)])
+    stats = sanitize_params_names(stats, inverse_all_params)
 
-    stats2 = OrderedDict()
-    for (n, params), v in six.iteritems(stats):
-        params_name = inverse_all_params[params]
-        params_name = re.sub("'challenge_seed': [0-9]+,", "", params_name)
-        params = params.new(challenge_seed=None)
-        stats2[(n, params_name)] = stats2.get((n, params_name), []) + v
-    stats = stats2
+    fmt = "{name:50s} :: n: {n:2d}, cputime {cputime:7.4f}s, walltime: {walltime:7.4f}s, slope: {slope:1.5f}, |db|: 2^{avg_max:.2f}"
+    profiles = print_stats(fmt, stats, ("cputime", "walltime", "slope", "avg_max"),
+                           extractf={"avg_max": lambda n, params, stat: db_stats(stat)[0]})
 
-    for (n, params) in stats:
-        stat = stats[(n, params)]
-        if stat[0]:  # may be None if dummy_tracer is used
-            cputime = sum([float(node["cputime"]) for node in stat])/len(stat)
-            walltime = sum([float(node["walltime"]) for node in stat])/len(stat)
-            fmt = "%48s :: n: %2d, cputime :%7.4fs, walltime :%7.4fs"
-            logging.info(fmt % (params, n, cputime, walltime))
+    output_profiles(args.profile, profiles)
+
+    if args.pickle:
+        pickler.dump(stats, open("bkz-%d-%d-%d-%d.sobj" %
+                                 (args.lower_bound, args.upper_bound, args.step_size, args.trials), "wb"))
 
 
 if __name__ == '__main__':

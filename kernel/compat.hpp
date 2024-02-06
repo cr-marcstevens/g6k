@@ -1,3 +1,23 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 // Taken from a fplll fork, adapted for G6K
 // Definitions for C++ version compatibility
 
@@ -410,7 +430,7 @@ inline constexpr ENUMNAME operator~(ENUMNAME const arg) \
 // MACRO for cachline padding: ensure this variable is in its own cacheline
 // this prevents unnecessary cacheline contention between CPUs
 // because several unrelated global variables are in the same cacheline
-struct cacheline_padding_t { uint64_t pad[8]; };
+struct cacheline_padding_t { uint64_t pad[16]; };
 // _ ## NOTE: added to interfere less with auto-completion of my editor
 #define CACHELINE_VARIABLE(type,name) cacheline_padding_t _ ## name ## prepad; type name; cacheline_padding_t _ ## name ## postpad;
 #define CACHELINE_VARIABLE2(type,name,init) cacheline_padding_t _ ## name ## prepad; type name init; cacheline_padding_t _ ## name ## postpad;

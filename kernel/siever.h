@@ -1,3 +1,23 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 #ifndef G6K_SIEVER_H
 #define G6K_SIEVER_H
 
@@ -21,19 +41,21 @@
 #include <condition_variable>
 #include "compat.hpp"
 #include "statistics.hpp"
+#include "g6k_config.h"
 
 using std::size_t;
 
 // Macros
 #include "untemplate.mac"   // This defines UNTEMPLATE_DIM, which is used to dispatch a function to
-                            // one of many template specializations with hardwired dimension.
-                            // This is done for some function calls as an optimization.
-                            // Note that UNTEMPLATE_DIM is only active if TEMPLATED_DIM is set, which
-                            // is activated by the build environment with rebuild.sh -t.
+                            // one of many template specializations with hardwired dimension. This
+                            // is done for some function calls as an optimization. Note that
+                            // UNTEMPLATE_DIM is only active if TEMPLATED_DIM is set, which is
+                            // activated by the build environment with ./configure
+                            // --enable-templated-dim
 
 // MACRO to enable CPU cycle counters. Use ATOMIC_CPUCOUNT for threaded functions.
 // Used counters should be registered in cpuperf.cpp.
-// DO NOT ENABLE THIS MANUALLY, use 'rebuild.sh -c'
+// DO NOT ENABLE THIS MANUALLY, use './configure --enable-cpucounters'
 /****  PERFORMANCE_COUNTING *****/
 #ifdef PERFORMANCE_COUNTING
 #include "cpuperformance.hpp"
@@ -106,10 +128,13 @@ using SimHashDescriptor = unsigned[XPC_BIT_LEN][6]; // typedef to avoid some awk
 
 // forward declarations:
 struct Entry;
+struct QEntry;
 struct CompressedEntry;
+struct atomic_size_t_wrapper;
 class Siever;
 class UidHashTable;
 class SimHashes;
+class ProductLSH;
 
 using UidType = uint64_t; // Type of the hash we are using for collision detection.
 
@@ -159,6 +184,7 @@ public:
   // Compute the uid of x using the current hash function.
   inline UidType compute_uid(std::array<ZT,MAX_SIEVING_DIM> const &x) const;
 
+  inline bool check_uid_unsafe(UidType uid); // checks whether uid is present without locks. Unsafe if other threads are writing to the hash table.
   inline bool check_uid(UidType uid);   // checks whether uid is present in the table. Avoid in multi-threaded contexts.
   inline bool insert_uid(UidType uid);  // inserts uid into the hash table. Return value indicates success (i.e. returns false if uid was present beforehand)
   inline bool erase_uid(UidType uid);   // removes uid from the hash table. return value indicates success (i.e. if it was present at all)
@@ -194,8 +220,10 @@ private:
     }
 
     // Note: The splitting is purely to allow better parallelism.
-    std::array<std::unordered_set<UidType>, DB_UID_SPLIT> db_uid;     // Sets of the uids of all vectors of the database. db_uid[i] contains only vectors with (normalized) uid % DB_UID_SPLIT == i.
-    std::array<std::mutex, DB_UID_SPLIT> db_mut; // array of mutexes. db_mut[i] protects all access to db_uid[i].
+    struct padded_map: std::unordered_set<UidType> { cacheline_padding_t pad; };
+    std::array<padded_map, DB_UID_SPLIT> db_uid;     // Sets of the uids of all vectors of the database. db_uid[i] contains only vectors with (normalized) uid % DB_UID_SPLIT == i.
+    struct padded_mutex: std::mutex { cacheline_padding_t pad; };
+    std::array<padded_mutex, DB_UID_SPLIT> db_mut; // array of mutexes. db_mut[i] protects all access to db_uid[i].    unsigned int n; // dimension of points in the domain of the hash function.
     unsigned int n; // dimension of points in the domain of the hash function.
                     // The hash function only works on vectors of this size
     std::vector<UidType> uid_coeffs;        // description of the hash function.
@@ -289,7 +317,10 @@ struct CompressedEntry {
 };
 
 // Define an ordering for sorting Compressed Entries, used for sorting.
-inline bool compare_CE(CompressedEntry const& lhs, CompressedEntry const& rhs) { return lhs.len < rhs.len; }
+struct compare_CE
+{
+    bool operator()(const CompressedEntry& lhs, const CompressedEntry& rhs) const { return lhs.len < rhs.len; }
+};
 
 /**
     An elements in the filtered_list (only used in single-threaded triple sieve)
@@ -331,8 +362,6 @@ public:
 
   size_t threads = 1;  // ... number of threads
 
-  unsigned int lift_left_bound = 0;  // Stop lift-and-compare at this absolute position (inclusive)
-
   bool sample_by_sums = true;
 
   bool otf_lift = true;       // Lift on the fly. If set to false,
@@ -359,6 +388,8 @@ public:
   size_t bgj1_transaction_bulk_size = 0;    // minimal size of transaction_db to launch
                                             // execute_delayed_insert; 0 means AUTO, i.e. 10 +
                                             // 2*threads.
+
+  double bdgl_improvement_db_ratio = .8;
 
   std::string simhash_codes_basedir = "";  // directory holding spherical codes for simhash.
 };
@@ -402,9 +433,9 @@ public:
     */
 
     explicit Siever(const SieverParams &params, unsigned long int seed = 0) :
-        full_n(0), full_muT(), full_rr(), l(0), r(-1), n(0), muT(), db(), cdb(),
-        best_lifts_so_far(), histo(),
-        rng(seed), sim_hashes(rng.rng_nolock())
+      full_n(0), full_muT(), full_rr(), ll(0), l(0), r(-1), n(0),
+      muT(), db(), cdb(),
+      best_lifts_so_far(), histo(), rng(seed), sim_hashes(rng.rng_nolock())
 #ifdef PERFORMANCE_COUNTING
         , _totalcpu(perfcounters[0])
 #endif
@@ -415,6 +446,7 @@ public:
     explicit Siever(unsigned int full_n, double const* mu, const SieverParams &params, unsigned long int seed = 0)
         : Siever(params, seed)
     {
+        
         load_gso(full_n, mu);
         r = full_n;
     }
@@ -433,7 +465,7 @@ public:
     // - update the local gso and recompute gaussian_heuristic for renormalization
     // - reset best_lift_so_far if r changed
     // - reset compression and uid functions
-    void initialize_local(unsigned int l_, unsigned int r_); // implemented in control.cpp
+    void initialize_local(unsigned int ll_, unsigned int l_, unsigned int r_); // implemented in control.cpp
 
     // Extend the context to the left (threaded)
     // - change the context
@@ -455,11 +487,6 @@ public:
     void extend_right(unsigned int rp); // implemented in control.cpp
 
 
-    // Unused functions ? Do these even work?
-    // Loads an external database of size N. It is appended to the current db (which is presumably empty).
-    void load_db(unsigned int N, long const* db_);  // implemented in control.cpp
-    // Saves the current N shortest vectors to an external db (pointed at by db). Note that it sorts before saving.
-    void save_db(unsigned int N, long* db_); // implemented in control.cpp
 
     // Increase the db size by sampling many new entries (threaded)
     // The new vectors are appended to the current db, leaving the current db elements untouched. Does not sort.
@@ -470,7 +497,7 @@ public:
     // TODO: Document parameter large
     void grow_db(unsigned long N, unsigned int large = 0); // implemented in control.cpp
 
-    // Sorts and shrink the database, keeping only the N best vectors
+     // Sorts and shrink the database, keeping only the N best vectors
     void shrink_db(unsigned long N); // implemented in control.cpp
 
     // Debug-only function. This makes a self-check of various invariants.
@@ -495,13 +522,11 @@ public:
     // An entry x is put into the bucket with center c if |<x,c>| > alpha * |x| * |c|
     void bgj1_sieve(double alpha); // in bgj1_sieve.cpp
 
-    // Run the gauss_triple_sieve (single threaded) on the current db
-    // Does not use updated
-    void gauss_triple_sieve_st(size_t max_db_size =0); // in triple_sieve.cpp
+    bool bdgl_sieve(size_t buckets, size_t blocks, size_t multi_hash); // in bdgl_sieve.cpp
 
     // runs a multi-threaded gauss-triple-sieve.
     // The parameter alpha has the same meaning as in bgj1.
-    void gauss_triple_mt(double alpha); // in triple_sieve_mt.cpp
+    void hk3_sieve(double alpha); // in triple_sieve_mt.cpp
 
 /**
     Retrieving data about the sieve:
@@ -514,7 +539,7 @@ public:
     // - TODO : TREAT THIS TASK for the otf_lift=False case
     void best_lifts(long* vecs, double* lens); // in control.cpp
 
-    void db_stats(double* min_av_max, long* cumul_histo); // in control.cpp
+    void db_stats(long* cumul_histo); // in control.cpp
 
     // collects various statistics about the sieve. Details about statistics collection are in statistics.hpp
     CACHELINE_VARIABLE(SieveStatistics, statistics);
@@ -539,10 +564,12 @@ public: // TODO: Make more things private and do not export to Python.
     // Note:  As usual with loops, iterators, ranges in c++, the range considered is [l, r),
     //        i.e. the left boundary in inclusive, the right boundary is exclusive.
 
+    unsigned int ll;                          // left of the lift context
     unsigned int l;                           // current context left position
     unsigned int r;                           // current context right position
     unsigned int n;                           // current context dimension, n = r - l
 
+  
     // gso_update_postprocessing post-processes the database with the change-of-basis transformation M
     // - Thread-safety ensured by each thread working on different data
     // - Matrix M should have dimension old_n * new_n
@@ -607,7 +634,7 @@ private:
 
     bool histo_valid = false;
 
-    CACHELINE_VARIABLE(std::vector<CompressedEntry>, bgj1_cdb_copy);   // temporary copy for sorting without affecting other threads
+    CACHELINE_VARIABLE(std::vector<CompressedEntry>, cdb_tmp_copy);   // temporary copy for sorting without affecting other threads
 
     CACHELINE_VARIABLE(std::vector<LiftEntry>, best_lifts_so_far); // vector of size r, containing good (i.e. short) vectors lifts so far.
                                           // More precisely, best_lifts_so_far[i] is an "Entry" of size r, whose GSO-projection onto
@@ -657,7 +684,7 @@ private:
     // consider renaming
     void set_lift_bounds(); // in control.cpp
 
-    // pre-allocate db_size slots for db and cdb (and bgj1_cdb_copy ???)
+    // pre-allocate db_size slots for db and cdb (and cdb_tmp_copy ???)
     void reserve(size_t reserve_db_size); // in control.cpp
 
     // Sets the number of threads used. Note that the threadpool uses nr-1 threads. It is intended
@@ -699,7 +726,7 @@ private:
     inline Entry sample(unsigned int large=0); // in db.inl
 
     // worker task for grow_db
-    void grow_db_task(unsigned long Nt, unsigned int large, std::vector<Entry> &ve); // in control.cpp
+    void grow_db_task(size_t start, size_t end, unsigned int large);
 
 /**
     Various functions to insert / replace elements in db / cdb. They are optimized for various
@@ -838,7 +865,7 @@ private:
     inline void addmul_vec(Container &a, Container2 const &b, const typename Container::value_type c, int num); // defined in siever.inl
 
     /**
-        implementation details of gauss_triple_mt: Everything prefixed by TS_ or gauss_triple_mt_ belongs to it
+        implementation details of hk3_sieve: Everything prefixed by TS_ or hk3_sieve_ belongs to it
         see triple_sieve_mt.cpp for details about how the algorithm works and what the individual functions do.
         The explanations here are only very brief. Note that the algorithm does not use cdb, but rather
         our own std::vector<CompressedEntry>'s, accessed via std::shared_ptr. The pointers point to
@@ -846,7 +873,7 @@ private:
         An important consequence is that DURING THE RUN OF GAUSS_TRIPLE_MT, CDB IS INVALID.
     **/
 
-    // Everything here is implemented in gauss_triple_mt
+    // Everything here is implemented in hk3_sieve
 
 //    using TS_CDB_Snapshot_Ptr = std::shared_ptr<std::vector<CompressedEntry>>;
 
@@ -896,39 +923,39 @@ private:
         std::atomic<size_t> ref_count; // counts the number of threads that currently use it.
     };
 
-    void gauss_triple_mt_task(TS_Transaction_DB_Type &transaction_db, MAYBE_UNUSED unsigned int id, double const alpha); // Main worker function. id is the thread-nr. Used only for debugging.
-    std::pair<Entry, size_t> gauss_triple_mt_get_p(TS_CDB_Snapshot * &thread_local_snapshot, unsigned int const id, TS_Transaction_DB_Type &transaction_db, float &update_len_bound); // obtains a new point p and cdb-range to work with.
-    void gauss_triple_mt_resort(MAYBE_UNUSED unsigned int const id); // resorts the current cdb-snapshot
-    void gauss_triple_mt_init_metainfo(size_t const already_processed, CompressedEntry const * const fast_cdb); // initializes / resets some of the atomic variables. Called after resorting
-    float gauss_triple_mt_update_lenbound(CompressedEntry const * const fast_cdb); // Recomputes the bound that determines when a vector is deemed interesting for insertion.
-    size_t gauss_triple_mt_execute_delayed_insertion(TS_Transaction_DB_Type &transaction_db, float &update_len_bound, MAYBE_UNUSED unsigned int const id); // inserts pending transactions into cdb and db.
+    void hk3_sieve_task(TS_Transaction_DB_Type &transaction_db, MAYBE_UNUSED unsigned int id, double const alpha); // Main worker function. id is the thread-nr. Used only for debugging.
+    std::pair<Entry, size_t> hk3_sieve_get_p(TS_CDB_Snapshot * &thread_local_snapshot, unsigned int const id, TS_Transaction_DB_Type &transaction_db, float &update_len_bound); // obtains a new point p and cdb-range to work with.
+    void hk3_sieve_resort(MAYBE_UNUSED unsigned int const id); // resorts the current cdb-snapshot
+    void hk3_sieve_init_metainfo(size_t const already_processed, CompressedEntry const * const fast_cdb); // initializes / resets some of the atomic variables. Called after resorting
+    float hk3_sieve_update_lenbound(CompressedEntry const * const fast_cdb); // Recomputes the bound that determines when a vector is deemed interesting for insertion.
+    size_t hk3_sieve_execute_delayed_insertion(TS_Transaction_DB_Type &transaction_db, float &update_len_bound, MAYBE_UNUSED unsigned int const id); // inserts pending transactions into cdb and db.
 
     // subroutine for the inner-loop. Templated to simplify the code (we call this with >= 4 different template args)
     template<bool EnforceOrder, class SmallContainer1, class LargeContainer2, class Integer1>
-    inline void gauss_triple_mt_process_inner_batch(TS_Transaction_DB_Type &transaction_db, Entry const &p, SmallContainer1 const &block1, Integer1 const end_block1, LargeContainer2 const &block2, size_t const end_block2, float &local_len_bound, MAYBE_UNUSED unsigned int const id);
+    inline void hk3_sieve_process_inner_batch(TS_Transaction_DB_Type &transaction_db, Entry const &p, SmallContainer1 const &block1, Integer1 const end_block1, LargeContainer2 const &block2, size_t const end_block2, float &local_len_bound, MAYBE_UNUSED unsigned int const id);
 
     // these functions attempt a reduction between 2 or 3 points and put the result onto transaction db.
     // The versions differ by how we access the points and what we already know about the scalar products / signs used in the reduction.
-    bool gauss_triple_mt_delayed_red_p_db(TS_Transaction_DB_Type &transaction_db, Entry const &p, size_t const x1_index, bool const sign_flip);
-    bool gauss_triple_mt_delayed_2_red_inner(TS_Transaction_DB_Type &transaction_db, size_t const x1_db_index, bool const x1_sign_flip, size_t const x2_db_index, bool const x2_sign_flip, UidType new_uid);
-    bool gauss_triple_mt_delayed_3_red(TS_Transaction_DB_Type &transaction_db, Entry const &p, size_t const x1_index, bool const x1_sign_flip, size_t const x2_index, bool const x2_sign_flip, UidType const new_uid);
+    bool hk3_sieve_delayed_red_p_db(TS_Transaction_DB_Type &transaction_db, Entry const &p, size_t const x1_index, bool const sign_flip);
+    bool hk3_sieve_delayed_2_red_inner(TS_Transaction_DB_Type &transaction_db, size_t const x1_db_index, bool const x1_sign_flip, size_t const x2_db_index, bool const x2_sign_flip, UidType new_uid);
+    bool hk3_sieve_delayed_3_red(TS_Transaction_DB_Type &transaction_db, Entry const &p, size_t const x1_index, bool const x1_sign_flip, size_t const x2_index, bool const x2_sign_flip, UidType const new_uid);
 
     // corresponding to the reduction attempts, we attempt on-the-fly-lifts.
-    void gauss_triple_mt_otflift_p_db(Entry const &p, size_t const db_index, bool const sign_flip, double const believed_len);
-    void gauss_triple_mt_otflift_p_x1_x2(Entry const &p, size_t const x1_db_index, bool const x1_sign_flip, size_t const x2_db_index, bool const x2_sign_flip, double const believed_len);
-    void gauss_triple_mt_otflift_x1_x2(size_t const x1_db_index, bool const x1_sign_flip, size_t const x2_db_index, bool const x2_sign_flip, double const believed_len);
+    void hk3_sieve_otflift_p_db(Entry const &p, size_t const db_index, bool const sign_flip, double const believed_len);
+    void hk3_sieve_otflift_p_x1_x2(Entry const &p, size_t const x1_db_index, bool const x1_sign_flip, size_t const x2_db_index, bool const x2_sign_flip, double const believed_len);
+    void hk3_sieve_otflift_x1_x2(size_t const x1_db_index, bool const x1_sign_flip, size_t const x2_db_index, bool const x2_sign_flip, double const believed_len);
 
     // snapshot management: thread-local snapshots and TS_latest_cdb_snapshot_p must be managed by
     // these function, which take care of ref-counting. See triple_sieve_mt.cpp for more details.
-    void gauss_triple_mt_release_snapshot(TS_CDB_Snapshot * &thread_local_snapshot, MAYBE_UNUSED unsigned int const id);
-    TS_CDB_Snapshot * gauss_triple_mt_get_latest_snapshot(MAYBE_UNUSED unsigned int const id);
-    CompressedEntry * gauss_triple_mt_get_true_fast_cdb();
-    TS_CDB_Snapshot * gauss_triple_mt_get_free_snapshot(MAYBE_UNUSED unsigned int const id);
-    void gauss_triple_mt_update_latest_cdb_snapshot(TS_CDB_Snapshot * const next_cdb_snapshot_ptr, MAYBE_UNUSED unsigned int const id);
-    void gauss_triple_mt_init_snapshots();
-    void gauss_triple_mt_restore_cdb();
+    void hk3_sieve_release_snapshot(TS_CDB_Snapshot * &thread_local_snapshot, MAYBE_UNUSED unsigned int const id);
+    TS_CDB_Snapshot * hk3_sieve_get_latest_snapshot(MAYBE_UNUSED unsigned int const id);
+    CompressedEntry * hk3_sieve_get_true_fast_cdb();
+    TS_CDB_Snapshot * hk3_sieve_get_free_snapshot(MAYBE_UNUSED unsigned int const id);
+    void hk3_sieve_update_latest_cdb_snapshot(TS_CDB_Snapshot * const next_cdb_snapshot_ptr, MAYBE_UNUSED unsigned int const id);
+    void hk3_sieve_init_snapshots();
+    void hk3_sieve_restore_cdb();
 
-    // Internal data structure. The cdb-snapshots are partially ordered and separated into 5 parts. See gauss_triple_mt.cpp for documentation.
+    // Internal data structure. The cdb-snapshots are partially ordered and separated into 5 parts. See hk3_sieve.cpp for documentation.
     // This separation encodes important information for the algorithm.
     CACHELINE_PAD(Pad_queue_mutex); // We want the following to reside close
     std::mutex TS_queue_head_mutex; // protects current_queue_head and TS_unmerged_transactions.
@@ -1052,6 +1079,33 @@ private:
     template <int tn>
     void bgj1_sieve_task(double alpha); // in bgj1_sieve.cpp
 
+    /**
+      Implementation details of bdgl sieve
+    */
+    inline int bdgl_reduce_with_delayed_replace(const size_t i1, const size_t i2, LFT const lenbound, std::vector<Entry> &transaction_db, int64_t &write_index, LFT new_l = -1.0, int8_t sign = 1);
+
+    inline void bdgl_lift(const size_t i1, const size_t i2, LFT new_l, int8_t sign);
+
+    bool bdgl_replace_in_db(size_t cdb_index, Entry &e);
+
+    void bdgl_bucketing_task(const size_t t_id, 
+                             std::vector<uint32_t> &buckets, std::vector<atomic_size_t_wrapper> &buckets_index,
+                             ProductLSH &lsh);
+    void bdgl_bucketing(const size_t blocks, const size_t multi_hash, const size_t nr_buckets_aim, 
+                        std::vector<uint32_t> &buckets, std::vector<atomic_size_t_wrapper> &buckets_index);
+
+    void bdgl_process_buckets_task(const size_t t_id, const std::vector<uint32_t> &buckets, 
+                                   const std::vector<atomic_size_t_wrapper> &buckets_index, std::vector<QEntry> &t_queue);
+    void bdgl_process_buckets(const std::vector<uint32_t> &buckets, const std::vector<atomic_size_t_wrapper> &buckets_index,
+                                std::vector<std::vector<QEntry>> &t_queues);
+    
+    void bdgl_queue_create_task( const size_t t_id, const std::vector<QEntry> &queue, std::vector<Entry> &transaction_dbi, int64_t &write_index);
+    void bdgl_queue_dup_remove_task( std::vector<QEntry> &queue);
+    size_t bdgl_queue_insert_task( const size_t t_id, std::vector<Entry> &transaction_dbi, int64_t write_index);
+    void bdgl_queue( std::vector<std::vector<QEntry>> &t_queues, std::vector<std::vector<Entry>> &transaction_db);
+
+    std::pair<LFT, int8_t> reduce_to_QEntry(CompressedEntry *ce1, CompressedEntry *ce2);
+
 // previously, these were global variables. TODO: Document / refactor those.
     CACHELINE_VARIABLE(std::atomic_size_t, GBL_replace_pos);
     CACHELINE_VARIABLE(std::atomic_size_t, GBL_replace_done_pos);
@@ -1059,7 +1113,7 @@ private:
     long GBL_max_trial; // maximum number of buckets bgj1 will consider between resorting before it gives up.
     CACHELINE_VARIABLE(std::atomic<std::int64_t>, GBL_remaining_trial);
     CACHELINE_VARIABLE(std::mutex, GBL_db_mutex);
-    CACHELINE_VARIABLE(std::atomic<CompressedEntry*>, GBL_start_of_cdb_ptr); // point always either to the start of cdb or to bgj1_cdb_copy (due to for sorting)
+    CACHELINE_VARIABLE(std::atomic<CompressedEntry*>, GBL_start_of_cdb_ptr); // point always either to the start of cdb or to cdb_tmp_copy (due to for sorting)
 
     // saturation stop conditions
     double GBL_saturation_histo_bound[Siever::size_of_histo]; // used by gauss sieve & triple sieve

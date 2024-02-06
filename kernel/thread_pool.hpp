@@ -1,3 +1,23 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 /*********************************************************************************\
 *                                                                                 *
 * https://github.com/cr-marcstevens/snippets/tree/master/cxxheaderonly            *
@@ -105,6 +125,9 @@ namespace thread_pool {
 		// stop the thread pool
 		void stop();
 
+		// process single task
+		bool work();
+
 		// process tasks & then wait until all threads are idle
 		void wait_work();
 
@@ -166,20 +189,24 @@ namespace thread_pool {
 		resize(0);
 	}
 
-	inline void thread_pool::wait_work()
+	inline bool thread_pool::work()
 	{
 		std::function<void()> task;
-		std::unique_lock<std::mutex> lock(_mutex);
-		while (!_tasks.empty())
 		{
+			std::lock_guard<std::mutex> lock(_mutex);
+			if (_tasks.empty())
+				return false;
 			task = std::move(this->_tasks.front());
 			this->_tasks.pop();
-
-			lock.unlock();
-			task();
-			lock.lock();
 		}
-		lock.unlock();
+		task();
+		return true;
+	}
+
+	inline void thread_pool::wait_work()
+	{
+		while (work())
+			;
 		while (_threads_busy != 0)
 			std::this_thread::yield();
 	}
@@ -192,15 +219,19 @@ namespace thread_pool {
 
 	inline void thread_pool::push(const std::function<void()>& f)
 	{
-		std::unique_lock<std::mutex> lock(_mutex);
-		_tasks.emplace(f);
+		{
+			std::unique_lock<std::mutex> lock(_mutex);
+			_tasks.emplace(f);
+		}
 		_condition.notify_one();
 	}
 
 	inline void thread_pool::push(std::function<void()>&& f)
 	{
-		std::unique_lock<std::mutex> lock(_mutex);
-		_tasks.emplace(std::move(f));
+		{
+			std::unique_lock<std::mutex> lock(_mutex);
+			_tasks.emplace(std::move(f));
+		}
 		_condition.notify_one();
 	}
 
@@ -217,29 +248,44 @@ namespace thread_pool {
 
 	inline void thread_pool::run(const std::function<void()>& f, int threads)
 	{
-		if (threads == -1 || threads > int(_threads.size()+1))
-			threads = _threads.size()+1;
-		for (int i = 0; i < threads; ++i)
-			this->push(f);
-		this->wait_work();
+		if (threads < 1 || threads > int(_threads.size())+1)
+			threads = int(_threads.size())+1;
+		{
+			std::unique_lock<std::mutex> lock(_mutex);
+			for (int i = 0; i < threads-1; ++i)
+				_tasks.emplace(f);
+		}
+		_condition.notify_all();
+		f();
+		this->wait_sleep();
 	}
 
 	inline void thread_pool::run(const std::function<void(int)>& f, int threads)
 	{
-		if (threads == -1 || threads > int(_threads.size()+1))
-			threads = _threads.size()+1;
-		for (int i = 0; i < threads; ++i)
-			this->push( [f,i](){f(i);} );
-		this->wait_work();
+		if (threads < 1 || threads > int(_threads.size())+1)
+			threads = int(_threads.size())+1;
+		{
+			std::unique_lock<std::mutex> lock(_mutex);
+			for (int i = 0; i < threads-1; ++i)
+				_tasks.emplace( [=](){f(i);} );
+		}
+		_condition.notify_all();
+		f(threads-1);
+		this->wait_sleep();
 	}
 
 	inline void thread_pool::run(const std::function<void(int,int)>& f, int threads)
 	{
-		if (threads == -1 || threads > int(_threads.size()+1))
-			threads = _threads.size()+1;
-		for (int i = 0; i < threads; ++i)
-			this->push( [f,i,threads](){f(i,threads);} );
-		this->wait_work();
+		if (threads < 1 || threads > int(_threads.size())+1)
+			threads = int(_threads.size())+1;
+		{
+			std::unique_lock<std::mutex> lock(_mutex);
+			for (int i = 0; i < threads-1; ++i)
+				_tasks.emplace( [=](){f(i,threads);} );
+		}
+		_condition.notify_all();
+		f(threads-1,threads);
+		this->wait_sleep();
 	}
 
 	inline void thread_pool::resize(std::size_t nrthreads)
@@ -247,13 +293,15 @@ namespace thread_pool {
 		if (nrthreads < _threads.size())
 		{
 			// decreasing number of active threads
+			std::unique_lock<std::mutex> lock(_mutex);
 			for (std::size_t i = nrthreads; i < _threads.size(); ++i)
 				*(_threads_stop[i]) = true;
 			_condition.notify_all();
+			lock.unlock();
 			for (std::size_t i = nrthreads; i < _threads.size(); ++i)
 				_threads[i]->join();
 
-			std::unique_lock<std::mutex> lock(_mutex);
+			lock.lock();
 			_threads_stop.resize(nrthreads);
 			_threads.resize(nrthreads);
 		} 
@@ -323,6 +371,7 @@ namespace thread_pool {
 		if (++_i >= _count)
 		{
 			_i = 0;
+			lock.unlock();
 			_condition.notify_all();
 		}
 		else

@@ -20,6 +20,8 @@ cdef extern from "../kernel/siever.h" nogil:
     cdef const long int BGJ1_ALPHA_STEP
     cdef const long int CACHE_BLOCK
 
+    cdef const int  MAX_SIEVING_DIM
+
     ctypedef double FT
     ctypedef float  LFT
     ctypedef int16_t ZT
@@ -190,7 +192,6 @@ cdef extern from "../kernel/siever.h" nogil:
         unsigned int reserved_n
         size_t reserved_db_size
         size_t threads
-        unsigned int lift_left_bound
         bool sample_by_sums
         bool otf_lift
         double lift_radius
@@ -202,6 +203,7 @@ cdef extern from "../kernel/siever.h" nogil:
         double bgj1_resort_ratio
         size_t bgj1_transaction_bulk_size
         string simhash_codes_basedir
+        double bdgl_improvement_db_ratio
 
     cdef cppclass Siever:
 
@@ -219,12 +221,10 @@ cdef extern from "../kernel/siever.h" nogil:
         void load_gso(unsigned int full_n, double* mu)
 
         # Local setup methods:
-        void initialize_local(unsigned int l_, unsigned int r_)
+        void initialize_local(unsigned int ll_, unsigned int l_, unsigned int r_)
         void extend_left(unsigned int lp)
         void shrink_left(unsigned int lp)
         void extend_right(unsigned int rp)
-        void load_db(unsigned int N, long* db_)
-        void save_db(unsigned int N, long* db_)
         void grow_db(unsigned long N, unsigned int large)
         void shrink_db(unsigned long N)
 
@@ -237,14 +237,12 @@ cdef extern from "../kernel/siever.h" nogil:
         void gauss_sieve() # uses default max_db_size
         bool nv_sieve()
         void bgj1_sieve(double alpha)
+        void bdgl_sieve(size_t nr_buckets, size_t blocks, size_t multi_hash)
 
-        void gauss_triple_sieve_st(size_t max_db_size)
-        void gauss_triple_sieve_st() # uses default max_db_size
-
-        void gauss_triple_mt(double alpha)
+        void hk3_sieve(double alpha)
 
         void best_lifts(long* vecs, double* lens)
-        void db_stats(double* min_av_max, long* cumul_histo)
+        void db_stats(long* cumul_histo)
 
         # statistics and histo:
         SieveStatistics statistics
@@ -260,6 +258,7 @@ cdef extern from "../kernel/siever.h" nogil:
         vector[vector[FT]] full_muT
         vector[FT] full_rr
 
+        unsigned int ll
         unsigned int l
         unsigned int r
         unsigned int n

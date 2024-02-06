@@ -1,3 +1,23 @@
+/***\
+*
+*   Copyright (C) 2018-2021 Team G6K
+*
+*   This file is part of G6K. G6K is free software:
+*   you can redistribute it and/or modify it under the terms of the
+*   GNU General Public License as published by the Free Software Foundation,
+*   either version 2 of the License, or (at your option) any later version.
+*
+*   G6K is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License
+*   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+*
+****/
+
+
 #ifndef G6K_HASH_TABLE_INL
 #define G6K_HASH_TABLE_INL
 
@@ -13,8 +33,11 @@ inline void UidHashTable::reset_hash_function(Siever& siever)
     uid_coeffs.resize(n);
     for (unsigned i = 0; i < n; i++)
         uid_coeffs[i] = siever.rng.rng_nolock();
-    for (unsigned i = 0; i < DB_UID_SPLIT; ++i)
-        db_uid[i].clear();
+    siever.threadpool.run([this](int th_i, int th_n)
+    {
+        for (auto j : pa::subrange(DB_UID_SPLIT, th_i, th_n))
+            db_uid[j].clear();
+    });
     insert_uid(0);
     return;
 }
@@ -47,6 +70,19 @@ inline bool UidHashTable::insert_uid(UidType uid)
     }
     return success;
 }
+
+// check for presence of uid in the database.
+inline bool UidHashTable::check_uid_unsafe(UidType uid)
+{
+    normalize_uid(uid);
+    if (db_uid[uid % DB_UID_SPLIT].count(uid) != 0)
+    {
+        return true;
+    }
+    else
+        return false;
+}
+
 
 // check for presence of uid in the database.
 inline bool UidHashTable::check_uid(UidType uid)

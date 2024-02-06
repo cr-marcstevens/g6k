@@ -1,4 +1,24 @@
 # -*- coding: utf-8 -*-
+####
+#
+#   Copyright (C) 2018-2021 Team G6K
+#
+#   This file is part of G6K. G6K is free software:
+#   you can redistribute it and/or modify it under the terms of the
+#   GNU General Public License as published by the Free Software Foundation,
+#   either version 2 of the License, or (at your option) any later version.
+#
+#   G6K is distributed in the hope that it will be useful,
+#   but WITHOUT ANY WARRANTY; without even the implied warranty of
+#   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+#   GNU General Public License for more details.
+#
+#   You should have received a copy of the GNU General Public License
+#   along with G6K. If not, see <http://www.gnu.org/licenses/>.
+#
+####
+
+
 """
 Command Line Interfaces
 """
@@ -25,16 +45,17 @@ from six.moves import range
 
 
 cli_arg_aliases = {
-                "--wo/": "--workout/",
-                "--sat_": "--saturation_",
-                "--sat-": "--saturation-",
-                "--chal_": "--challenge_",
-                "--sieve": "--default_sieve",
-                "hk3": "gauss_triple_mt",
-                "d4f": "dim4free",
-                "pnj": "pump_and_jump",
-                "beta": "blocksize"
-                }
+    "--wo/": "--workout/",
+    "--sat_": "--saturation_",
+    "--sat-": "--saturation-",
+    "--chal_": "--challenge_",
+    "--sieve": "--default_sieve",
+    "gauss_triple_mt": "hk3",
+    "gauss_triple": "hk3",
+    "d4f": "dim4free",
+    "pnj": "pump_and_jump",
+    "beta": "blocksize"
+}
 
 
 def apply_aliases(cli_args):
@@ -132,9 +153,9 @@ def git_revisionf():
 
     for cmd in cmds:
         try:
-            r = str(subprocess.check_output(cmd).rstrip())
+            r = str(subprocess.check_output(cmd, stderr=subprocess.STDOUT).rstrip())
             git_revision.append(r)
-        except ValueError:
+        except (ValueError, subprocess.CalledProcessError):
             pass
 
     git_revision = "-".join(git_revision)
@@ -171,7 +192,6 @@ def parse_args(description, ParamsClass=SieverParams, **kwds):
     :param kwds: default parameters
 
     """
-
     parser = argparse.ArgumentParser(description=description,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('lower_bound', type=int,
@@ -194,6 +214,7 @@ def parse_args(description, ParamsClass=SieverParams, **kwds):
                         help="Show default parameters and exit.")
     parser.add_argument('--loglvl', type=str, help="Logging level (one of DEBUG, WARN, INFO)", default="INFO")
     parser.add_argument('--log-filename', dest="log_filename", type=str, help="Logfile filename", default=None)
+    parser.add_argument('--profile', dest="profile", type=str, help="Output final log-profile into specified file (.csv, .pdf, .png, ...)", default=None)
     args, unknown = parser.parse_known_args()
 
     kwds_ = OrderedDict()
@@ -230,6 +251,18 @@ def parse_args(description, ParamsClass=SieverParams, **kwds):
             if v.startswith("--") or v.startswith("-"):
                 i -= 1
                 break
+
+            try:
+                L = re.match("([0-9]+)~([0-9]+)~?([0-9]+)?", v).groups()
+                if L[2] is not None:
+                    v = range(int(L[0]), int(L[1]), int(L[2]))
+                else:
+                    v = range(int(L[0]), int(L[1]))
+                unknown_args[k].extend(v)
+                continue
+            except:
+                pass
+
             try:
                 v = eval(v, {"BKZ": BKZ})
             except NameError:
